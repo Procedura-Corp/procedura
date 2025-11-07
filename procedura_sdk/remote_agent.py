@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib   # ← needed by _close()
+import contextlib
 import json
 import os
 import pathlib
@@ -114,24 +114,67 @@ class RemoteAgent:
 
     # ─────────────────────────── request patterns ───────────────────────────
 
-    async def _request_sync(self, cmd: str, args: List[str]) -> dict:
+    async def _request_sync(
+        self,
+        cmd: str,
+        args: List[str],
+        *,
+        ack_timeout: float = 10.0,
+        final_timeout: float = 600.0,
+    ) -> dict:
         """
         For ws_adapter 'sync' requests:
-          - server sends {"id": <msg_id>, "status": "ack"}
-          - and also a targeted event: {"id": <msg_id>, "status": "finished", "result": ...}
+          - server usually sends {"id": <msg_id>, "status": "ack"}
+          - then a targeted final: {"id": <msg_id>, "status": "finished", "result": ...}
+          - some errors come as a single immediate {"status": "error"} (no ack).
         """
         msg_id = uuid.uuid4().hex[:8]
         q: "asyncio.Queue[dict]" = asyncio.Queue()
         self._by_job[msg_id] = q
         try:
             await self._send({"id": msg_id, "cmd": cmd, "args": args, "mode": "sync"})
-            # 1) tiny ACK (we don't need to inspect it)
-            _ = await asyncio.wait_for(q.get(), timeout=10.0)
-            # 2) targeted final frame
-            while True:
-                ev = await asyncio.wait_for(q.get(), timeout=120.0)
-                if ev.get("status") in {"finished", "error"}:
-                    return ev
+
+            # 1) First frame could be 'ack' OR immediate 'error'/'finished'
+            try:
+                first = await asyncio.wait_for(q.get(), timeout=ack_timeout)
+            except asyncio.TimeoutError:
+                return {
+                    "status": "error",
+                    "code": "ACK_TIMEOUT",
+                    "message": f"timeout waiting for ack after {ack_timeout}s",
+                    "cmd": cmd,
+                }
+            except asyncio.CancelledError:
+                return {
+                    "status": "error",
+                    "code": "ACK_CANCELLED",
+                    "message": "ack wait cancelled",
+                    "cmd": cmd,
+                }
+
+            if first.get("status") in {"error", "finished"}:
+                return first
+
+            # 2) Wait for targeted final
+            try:
+                while True:
+                    ev = await asyncio.wait_for(q.get(), timeout=final_timeout)
+                    if ev.get("status") in {"finished", "error"}:
+                        return ev
+            except asyncio.TimeoutError:
+                return {
+                    "status": "error",
+                    "code": "FINAL_TIMEOUT",
+                    "message": f"timeout waiting for final result after {final_timeout}s",
+                    "cmd": cmd,
+                }
+            except asyncio.CancelledError:
+                return {
+                    "status": "error",
+                    "code": "FINAL_CANCELLED",
+                    "message": "final wait cancelled",
+                    "cmd": cmd,
+                }
         finally:
             self._by_job.pop(msg_id, None)
 
@@ -177,11 +220,19 @@ class RemoteAgent:
         return self.run("worldstate_snapshot", args)
 
     # Core runner (sync) – returns final result or raises on error.
-    def run(self, module: str, args: List[str] | None = None) -> Any:
-        return asyncio.run(self._run_sync(module, args or []))
+    def run(
+        self,
+        module: str,
+        args: List[str] | None = None,
+        *,
+        ack_timeout: float = 10.0,
+        final_timeout: float = 600.0,
+    ) -> Any:
+        return asyncio.run(self._run_sync(module, args or [], ack_timeout=ack_timeout, final_timeout=final_timeout))
 
-    async def _run_sync(self, module: str, args: List[str]) -> Any:
-        ev = await self._request_sync(module, args)
+    async def _run_sync(self, module: str, args: List[str], *, ack_timeout: float, final_timeout: float) -> Any:
+        # Do NOT prepend the module; ws_adapter already does that.
+        ev = await self._request_sync(module, args, ack_timeout=ack_timeout, final_timeout=final_timeout)
         status = ev.get("status")
         if status == "finished":
             out = ev.get("result")
@@ -193,6 +244,10 @@ class RemoteAgent:
                     self.cfg.subprotocol_token = tok
                     self.cfg.auth_header_token = tok
             return out
+        # Graceful error bubble-up
+        if status == "error":
+            # return structured dict so CLI can print JSON nicely
+            return ev
         raise RuntimeError(ev.get("message") or "request failed")
 
     # Async stream – yields events (running → finished)

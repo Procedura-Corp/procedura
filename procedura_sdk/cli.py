@@ -9,21 +9,47 @@ def _print(obj):
     print(json.dumps(obj, indent=2, ensure_ascii=False))
 
 def cmd_login(args):
-    ra = RemoteAgent(args.url, token=args.token)
-    out = ra.login_password(args.credential, replace=(not args.attach), device=args.device, ttl=args.ttl)
-    _print(out)
+    try:
+        ra = RemoteAgent(args.url, token=args.token)
+        out = ra.login_password(
+            args.credential,
+            replace=(not args.attach),
+            device=args.device,
+            ttl=args.ttl,
+        )
+        _print(out)
+    except Exception as e:
+        _print({"status": "error", "message": str(e)})
+        raise SystemExit(1)
 
 def cmd_run(args):
-    ra = RemoteAgent(args.url, token=args.token)
-    out = ra.run(args.module, args.module_args or [])
-    _print(out)
+    try:
+        ra = RemoteAgent(args.url, token=args.token)
+        out = ra.run(
+            args.module,
+            args.module_args or [],
+            ack_timeout=args.ack_timeout,
+            final_timeout=args.final_timeout,
+        )
+        _print(out)
+    except Exception as e:
+        _print({"status": "error", "message": str(e)})
+        raise SystemExit(1)
 
 def cmd_stream(args):
     async def go():
         ra = RemoteAgent(args.url, token=args.token)
-        async for ev in ra.run_async_stream(args.module, args.module_args or []):
+        async for ev in ra.run_async_stream(
+            args.module,
+            args.module_args or [],
+            # Optional: could add ack_timeout for async in future
+        ):
             _print(ev)
-    asyncio.run(go())
+    try:
+        asyncio.run(go())
+    except Exception as e:
+        _print({"status": "error", "message": str(e)})
+        raise SystemExit(1)
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="procedura", description="Procedura SDK CLI (WSS)")
@@ -43,6 +69,8 @@ def main(argv=None):
     rp = sub.add_parser("run", help="Run a module synchronously")
     rp.add_argument("module", help="Module name (e.g., worldstate_snapshot)")
     rp.add_argument("module_args", nargs="*", help="Args after '--' go to module")
+    rp.add_argument("--ack-timeout", type=float, default=10.0, help="Seconds to wait for ack (default 10)")
+    rp.add_argument("--final-timeout", type=float, default=600.0, help="Seconds to wait for final result (default 600)")
     rp.set_defaults(func=cmd_run)
 
     # stream (async)
