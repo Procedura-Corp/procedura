@@ -38,7 +38,7 @@ def _save_token(tok: str | None) -> None:
 class RemoteAgent:
     """
     Minimal client for ws_adapter:
-      - request/response correlation via 'id'
+      - request/response correlation via 'id' (and remap to 'job_id' when provided)
       - sync runs: returns final 'finished.result'
       - async runs: yields events ('running' ... 'finished')
     """
@@ -86,7 +86,7 @@ class RemoteAgent:
                     msg = json.loads(raw)
                 except Exception:
                     continue
-                # Route by 'id' (aka job_id)
+                # Route by 'id' (aka client msg id) or server 'job_id'
                 jid = str(msg.get("id") or msg.get("job_id") or "")
                 if jid and jid in self._by_job:
                     await self._by_job[jid].put(msg)
@@ -124,13 +124,14 @@ class RemoteAgent:
     ) -> dict:
         """
         For ws_adapter 'sync' requests:
-          - server usually sends {"id": <msg_id>, "status": "ack"}
-          - then a targeted final: {"id": <msg_id>, "status": "finished", "result": ...}
+          - server usually sends {"id": <msg_id>, "status": "ack"[,"job_id": "..."]}
+          - then a targeted final: {"id": <msg_id> OR "job_id": "...", "status": "finished", "result": ...}
           - some errors come as a single immediate {"status": "error"} (no ack).
         """
         msg_id = uuid.uuid4().hex[:8]
         q: "asyncio.Queue[dict]" = asyncio.Queue()
         self._by_job[msg_id] = q
+        job_id_key_added = None
         try:
             await self._send({"id": msg_id, "cmd": cmd, "args": args, "mode": "sync"})
 
@@ -152,10 +153,17 @@ class RemoteAgent:
                     "cmd": cmd,
                 }
 
+            # If server immediately finished/errored, return it.
             if first.get("status") in {"error", "finished"}:
                 return first
 
-            # 2) Wait for targeted final
+            # NEW: if ack includes a server job_id, also route by that key
+            job_id = first.get("job_id")
+            if isinstance(job_id, str) and job_id:
+                self._by_job[job_id] = q
+                job_id_key_added = job_id
+
+            # 2) Wait for targeted final (could arrive with id=msg_id or job_id)
             try:
                 while True:
                     ev = await asyncio.wait_for(q.get(), timeout=final_timeout)
@@ -177,20 +185,31 @@ class RemoteAgent:
                 }
         finally:
             self._by_job.pop(msg_id, None)
+            if job_id_key_added:
+                self._by_job.pop(job_id_key_added, None)
 
     async def _request_async_stream(self, cmd: str, args: List[str]) -> AsyncGenerator[dict, None]:
         """
         For ws_adapter 'async' requests:
           - immediate response: {"id": <msg_id>, "status": "started", "job_id": "..."}
-          - then targeted frames ('running' ... 'finished')
+          - then targeted frames (by "id" OR "job_id") → ('running' ... 'finished')
         """
         msg_id = uuid.uuid4().hex[:8]
         q: "asyncio.Queue[dict]" = asyncio.Queue()
         self._by_job[msg_id] = q
+        job_id_key_added = None
         try:
             await self._send({"id": msg_id, "cmd": cmd, "args": args, "mode": "async"})
             started = await asyncio.wait_for(q.get(), timeout=10.0)
+
+            # NEW: also bind the same queue to server job_id for subsequent frames
+            job_id = started.get("job_id")
+            if isinstance(job_id, str) and job_id:
+                self._by_job[job_id] = q
+                job_id_key_added = job_id
+
             yield {"phase": "started", **started}
+
             while True:
                 ev = await asyncio.wait_for(q.get(), timeout=3600.0)
                 st = ev.get("status")
@@ -201,6 +220,8 @@ class RemoteAgent:
                     return
         finally:
             self._by_job.pop(msg_id, None)
+            if job_id_key_added:
+                self._by_job.pop(job_id_key_added, None)
 
     # ─────────────────────────── public high-level API ───────────────────────────
 

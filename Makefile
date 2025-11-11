@@ -28,6 +28,7 @@ login:
 
 init:
 	$(PY) -m procedura_sdk.modules.init_character \
+	  --ack-timeout 600 \
 	  --url 'wss://latticeui.scorchednebraska.com:33000/' \
 	  --role-id explorer --sub-id cartographer
 
