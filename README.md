@@ -34,7 +34,7 @@ procedura/
 ## Requirements
 
 * Python **3.10+**
-* `websockets >= 11.0`
+* `websockets >= 11.0,<12.0`
 * A running Procedura **ws_adapter** endpoint (`ws://` or `wss://`), e.g. `ws://127.0.0.1:8765`.
 
 > **Note (Debian/Ubuntu / WSL):** System Python is PEP 668 “externally managed.” Use a **virtualenv** (recommended) or `pipx`.
