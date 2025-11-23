@@ -34,7 +34,7 @@ procedura/
 ## Requirements
 
 * Python **3.10+**
-* `websockets >= 12.0`
+* `websockets >= 11.0,<12.0`
 * A running Procedura **ws_adapter** endpoint (`ws://` or `wss://`), e.g. `ws://127.0.0.1:8765`.
 
 > **Note (Debian/Ubuntu / WSL):** System Python is PEP 668 “externally managed.” Use a **virtualenv** (recommended) or `pipx`.
@@ -77,6 +77,13 @@ procedura --url ws://127.0.0.1:8765 login "admin@procedura.org:secret123" --ttl 
 
 * Token is saved to **`~/.procedura/token`** for reuse.
 * The server may also echo the token via the subprotocol.
+
+### Remote server
+```bash
+procedura --url wss://latticeui.scorchednebraska.com:<PORT> login "account:password"
+```
+* Replace <PORT> with the correct remote port (e.g., 33000 or another assigned port)
+* Ensure the remote endpoint supports secure WebSocket.
 
 ### 2) Run a module (sync)
 
