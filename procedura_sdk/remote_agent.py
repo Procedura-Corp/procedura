@@ -7,10 +7,13 @@ import json
 import os
 import pathlib
 import uuid
+import time
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, List, Optional
 
 import websockets
+
+from procedura_sdk.metrics import get_metrics
 
 TOKEN_PATH = pathlib.Path(os.getenv("PROCEDURA_TOKEN_FILE", "~/.procedura/token")).expanduser()
 
@@ -129,23 +132,50 @@ class RemoteAgent:
           - some errors come as a single immediate {"status": "error"} (no ack).
         """
         msg_id = uuid.uuid4().hex[:8]
+        start_ts = time.time()
+        ack_ts: Optional[float] = None
+        
         q: "asyncio.Queue[dict]" = asyncio.Queue()
         self._by_job[msg_id] = q
         job_id_key_added = None
+        
+        # Metrics helper
+        def _record(status: str, result: Any = None, error: str = None, job_id: str = None):
+            metrics = get_metrics()
+            metrics.record_event(
+                cmd=cmd,
+                args=args,
+                msg_id=msg_id,
+                start_ts=start_ts,
+                status=status,
+                ack_ts=ack_ts,
+                final_ts=time.time(),
+                job_id=job_id or job_id_key_added,
+                result=result,
+                error=error
+            )
+            # Save error responses to separate errors.json
+            if status == "error" and isinstance(result, dict):
+                metrics.save_error(result)
+
         try:
             await self._send({"id": msg_id, "cmd": cmd, "args": args, "mode": "sync"})
 
             # 1) First frame could be 'ack' OR immediate 'error'/'finished'
             try:
                 first = await asyncio.wait_for(q.get(), timeout=ack_timeout)
+                ack_ts = time.time()
             except asyncio.TimeoutError:
+                err_msg = f"timeout waiting for ack after {ack_timeout}s"
+                _record("timeout", error=err_msg)
                 return {
                     "status": "error",
                     "code": "ACK_TIMEOUT",
-                    "message": f"timeout waiting for ack after {ack_timeout}s",
+                    "message": err_msg,
                     "cmd": cmd,
                 }
             except asyncio.CancelledError:
+                _record("error", error="ack wait cancelled")
                 return {
                     "status": "error",
                     "code": "ACK_CANCELLED",
@@ -154,7 +184,11 @@ class RemoteAgent:
                 }
 
             # If server immediately finished/errored, return it.
-            if first.get("status") in {"error", "finished"}:
+            status = first.get("status")
+            if status in {"error", "finished"}:
+                # For errors, pass the whole object as result to capture extra context (like 'coord')
+                res = first.get("result") if status == "finished" else first
+                _record(status, result=res, error=first.get("message"), job_id=first.get("job_id"))
                 return first
 
             # NEW: if ack includes a server job_id, also route by that key
@@ -167,16 +201,23 @@ class RemoteAgent:
             try:
                 while True:
                     ev = await asyncio.wait_for(q.get(), timeout=final_timeout)
-                    if ev.get("status") in {"finished", "error"}:
+                    status = ev.get("status")
+                    if status in {"finished", "error"}:
+                        # For errors, pass the whole object as result to capture extra context
+                        res = ev.get("result") if status == "finished" else ev
+                        _record(status, result=res, error=ev.get("message"), job_id=ev.get("job_id"))
                         return ev
             except asyncio.TimeoutError:
+                err_msg = f"timeout waiting for final result after {final_timeout}s"
+                _record("timeout", error=err_msg)
                 return {
                     "status": "error",
                     "code": "FINAL_TIMEOUT",
-                    "message": f"timeout waiting for final result after {final_timeout}s",
+                    "message": err_msg,
                     "cmd": cmd,
                 }
             except asyncio.CancelledError:
+                _record("error", error="final wait cancelled")
                 return {
                     "status": "error",
                     "code": "FINAL_CANCELLED",
@@ -264,6 +305,20 @@ class RemoteAgent:
                     _save_token(tok)
                     self.cfg.subprotocol_token = tok
                     self.cfg.auth_header_token = tok
+            
+            # Check if worldstate_snapshot has empty entities (init failed)
+            if module == "worldstate_snapshot" and isinstance(out, dict):
+                entities = out.get("entities")
+                if isinstance(entities, dict) and len(entities) == 0:
+                    error_response = {
+                        "status": "error",
+                        "code": "EMPTY_WORLD",
+                        "message": "World not initialized: entities is empty",
+                        "cmd": module,
+                        "result": out
+                    }
+                    get_metrics().save_error(error_response)
+
             return out
         # Graceful error bubble-up
         if status == "error":

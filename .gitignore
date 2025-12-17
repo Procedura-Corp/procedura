@@ -27,3 +27,6 @@ Thumbs.db
 
 # Procedura SDK
 .procedura/
+runtime_ram/
+logs/
+report.csv
