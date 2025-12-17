@@ -8,7 +8,12 @@ version = "0.1.0"
 description = "Beginner-friendly Python SDK and CLI for driving Procedura agents over WebSocket/WSS"
 authors = [{ name = "Procedura Corp" }]
 requires-python = ">=3.10"
-dependencies = ["websockets>=11.0,<12.0"]
+dependencies = [
+    "websockets>=11.0,<12.0",
+    "numpy",
+    "matplotlib",
+    "zstandard"
+]
 readme = "README.md"
 
 [project.scripts]

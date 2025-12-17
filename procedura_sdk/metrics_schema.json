@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Procedura CLI Event Schema",
+  "type": "object",
+  "required": ["schema", "ts", "cmd", "msg_id", "status"],
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "description": "Schema version (currently 1)"
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Event start timestamp (ISO 8601 UTC)"
+    },
+    "cmd": {
+      "type": "string",
+      "description": "Command name (e.g. 'worldstate_snapshot')"
+    },
+    "args": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Command arguments"
+    },
+    "msg_id": {
+      "type": "string",
+      "description": "Client-side message ID"
+    },
+    "job_id": {
+      "type": ["string", "null"],
+      "description": "Server-side job ID (if available)"
+    },
+    "ack_ts": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Timestamp when server ACK was received"
+    },
+    "final_ts": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Timestamp when final result was received"
+    },
+    "ack_latency_ms": {
+      "type": ["number", "null"],
+      "description": "Latency to ACK in milliseconds"
+    },
+    "final_latency_ms": {
+      "type": ["number", "null"],
+      "description": "Latency to final result in milliseconds"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ack", "running", "finished", "error", "timeout"],
+      "description": "Final status of the command execution"
+    },
+    "result_code": {
+      "type": ["integer", "null"],
+      "description": "Result code (if applicable)"
+    },
+    "result_summary": {
+      "type": ["string", "object", "null"],
+      "description": "Short summary or redacted result"
+    },
+    "payload_size": {
+      "type": "integer",
+      "description": "Size of the result payload in bytes"
+    },
+    "error": {
+      "type": ["string", "null"],
+      "description": "Error message if status is 'error'"
+    },
+    "agent_version": {
+      "type": ["string", "null"],
+      "description": "Version of the Procedura agent"
+    },
+    "env": {
+      "type": "object",
+      "description": "Runtime environment metadata"
+    }
+  }
+}
