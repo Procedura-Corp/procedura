@@ -21,24 +21,26 @@ pip install -e .
 
 ### Basic Commands
 
+All commands connect to the Procedura server. You can specify the server URL using the `--url` flag.
+**Default URL:** `wss://vt.vm.scorchedserver.com:33000` (used in examples below).
+
 #### 1. Login (`login`)
 Authenticate with the server. This command exchanges your credentials for a session token and saves it locally (default: `~/.procedura/token`).
 
 **Usage:**
 ```bash
-procedura login [CREDENTIAL] [OPTIONS]
+procedura --url wss://vt.vm.scorchedserver.com:33000 login [CREDENTIAL] [OPTIONS]
 ```
 
 **Arguments:**
 *   `CREDENTIAL`: Your login string, typically `email:password`.
 *   `--attach`: If set, attempts to attach to an existing session instead of replacing it.
-*   `--device`: Label for the device key (default: `cli`).
-*   `--ttl`: Session time-to-live in seconds (default: `3600`).
+*   `--ttl`: Session time-to-live in seconds .
 
 **Example:**
 ```bash
 # Login with a 2-hour session
-procedura login 'user@example.com:password' --ttl 7200
+procedura --url wss://vt.vm.scorchedserver.com:33000 login 'user@example.com:password' --ttl 7200
 ```
 
 #### 2. Run a Command (`run`)
@@ -46,7 +48,7 @@ Execute a remote module synchronously. The CLI waits for the server to acknowled
 
 **Usage:**
 ```bash
-procedura run [MODULE] [MODULE_ARGS...] [OPTIONS]
+procedura --url wss://vt.vm.scorchedserver.com:33000 run [MODULE] [MODULE_ARGS...] [OPTIONS]
 ```
 
 **Arguments:**
@@ -58,30 +60,17 @@ procedura run [MODULE] [MODULE_ARGS...] [OPTIONS]
 **Example:**
 ```bash
 # Take a snapshot of the current world state (terse mode)
-procedura run worldstate_snapshot --terse
+procedura --url wss://vt.vm.scorchedserver.com:33000 run worldstate_snapshot --terse
 ```
 
-#### 3. Stream Events (`stream`)
-Execute a remote module and stream updates in real-time. Unlike `run`, this prints every event received from the server until the job finishes.
-
-**Usage:**
-```bash
-procedura stream [MODULE] [MODULE_ARGS...]
-```
-
-**Example:**
-```bash
-# Stream updates from a long-running task
-procedura stream some_long_running_task
-```
 
 ---
 
-## 2. Observability & Logging (For Developers)
+## 2. Observability & Logging 
 
 We prioritize transparency and debugging. The system uses a **Dual-Write** architecture to ensure data is both efficient for machines and readable for humans.
 
-### 2.1 Event Logging (The "Black Box")
+### 2.1 Event Logging 
 Every command you execute is recorded. We store this data in two formats simultaneously:
 
 1.  **`runtime_ram/cli_events/` (BitStream)**
@@ -120,14 +109,38 @@ The system automatically checks the integrity of `worldstate_snapshot`.
 }
 ```
 
-### 2.3 Privacy & Redaction
+### 2.3 Data Storage & Logic
+
+We distinguish between **Events** (what happened) and **State** (current status).
+
+*   **Events (Immutable History)**
+    *   **Storage**: `runtime_ram/cli_events` (BitStream) & `runtime_ram/events.json`
+    *   **Logic**: Every command execution creates a **new, complete record**. Even if you run the same command twice, two distinct events are recorded with unique timestamps and latencies.
+
+*   **State (Current Status)**
+    *   **Storage**: `runtime_ram/cli_state` (DeltaRAM)
+    *   **Logic**: Stores values that change over time (e.g., `cli_stats`, `last_login`).
+    *   **Mechanism**: **Diff-based**. Only the *changes* (deltas) between the current state and the previous state are written to disk.
+
+*   **Application Logs (System Internals)**
+    *   **Storage**: `logs/`
+    *   **Logic**: Separate from CLI events. These logs record the internal behavior of the `stack-main` core (e.g., `logs/system/`, `logs/failures/`).
+
+### 2.4 Privacy & Redaction
 All logs are automatically sanitized. Sensitive keys (like `password`, `token`, `secret`) are replaced with `<redacted>` before being written to disk.
 
 ---
 
 ## 3. System Architecture
 
-The following diagram illustrates how user commands flow through the system, are instrumented, and finally logged to storage.
+The system operates in four distinct layers to ensure reliability and observability:
+
+1.  **Interface Layer** (`procedura_sdk/cli.py`): Handles user commands and updates persistent usage statistics via DeltaRAM.
+2.  **Agent Layer** (`procedura_sdk/remote_agent.py`): Manages WebSocket connections, measures timestamps, and captures full results including error contexts.
+3.  **Observability Layer** (`procedura_sdk/metrics.py`): Handles redaction and the dual-write dispatch to storage.
+4.  **Storage Layer** (`stack-main/modules/` & `runtime_ram/`): Manages the BitStream (immutable chain) and DeltaRAM (state diffs).
+
+### Workflow Diagram
 
 ```mermaid
 graph TD
@@ -139,6 +152,7 @@ graph TD
 
     subgraph User_Layer [User Layer]
         A("<b>User Input</b><br/>(CLI Commands)"):::process -->|1. Execute| B
+        A -->|Update Stats| Delta("<b>DeltaRAM</b><br/>(State Diffs)"):::storage
     end
 
     subgraph Agent_Layer [Agent Layer]
@@ -157,6 +171,10 @@ graph TD
         LogEvent -->|"Compress"| BitStream[("runtime_ram/cli_events/")]:::storage
     end
 
+    subgraph IO_Layer [Low-level I/O Layer]
+        Delta -->|"Write Diff"| D_Out[("runtime_ram/cli_state<br/>(State Persistence)")]:::io
+    end
+
     %% Link Styles
     linkStyle default stroke-width:2px,fill:none,stroke:black;
 ```
@@ -167,13 +185,26 @@ graph TD
 
 ### Inspecting Events
 Use the dump tool to export binary logs to CSV for analysis.
+
 ```bash
-# Export last 5 events
+# Show the last 10 events
+python3 tools/events_dump.py --last 10
+
+# Export the latest 5 events (all commands) as CSV
 python3 tools/events_dump.py --last 5 --csv > report.csv
 ```
 
 ### Inspecting State
 View the persistent state (like usage statistics) stored in DeltaRAM.
+
 ```bash
+# Inspect all state files in the directory
 python3 tools/inspect_state.py runtime_ram/cli_state
+```
+
+### Troubleshooting
+If you see empty output from `events_dump.py`, ensure you have the required dependencies installed:
+
+```bash
+pip install zstandard
 ```
