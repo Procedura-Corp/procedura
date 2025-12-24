@@ -1,8 +1,4 @@
-# Procedura Project Guide
 
-Welcome to the Procedura Project Guide. This document is designed for both **new users** getting started with the SDK and **developers** looking to understand the internal observability and error logging systems.
-
----
 
 ## 1. Getting Started
 
