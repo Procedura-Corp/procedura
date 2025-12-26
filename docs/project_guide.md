@@ -147,15 +147,16 @@ graph TD
     classDef error fill:#ffebee,stroke:#c62828,stroke-width:2px;
 
     subgraph User_Layer [User Layer]
-        A("<b>User Input</b><br/>(CLI Commands)"):::process -->|1. Execute| B
-        A -->|Update Stats| Delta("<b>DeltaRAM</b><br/>(State Diffs)"):::storage
+        CLI("<b>CLI Interface</b><br/>(cli.py)"):::process
     end
 
     subgraph Agent_Layer [Agent Layer]
-        B("<b>RemoteAgent</b><br/>(remote_agent.py)"):::process
-        B -->|"2. Send Request"| Server["WebSocket Server"]
-        Server -->|"3. Response"| B
-        B -->|"4. Check for Errors"| ErrorCheck{Is Error?}
+        Agent("<b>RemoteAgent</b><br/>(remote_agent.py)"):::process
+        CLI -->|1. Execute| Agent
+        Agent -->|"2. Send Request"| Server["WebSocket Server"]
+        Server -->|"3. Response"| Agent
+        Agent -->|"4. Check for Errors"| ErrorCheck{Is Error?}
+        Agent -.->|"Return Result"| CLI
     end
 
     subgraph Observability_Layer [Observability Layer]
@@ -163,8 +164,13 @@ graph TD
         ErrorCheck -- No --> LogEvent("<b>Record Event</b><br/>(metrics.record_event)"):::process
         
         LogError -->|"Write"| ErrorFile[("runtime_ram/errors.json")]:::io
+        LogError -.->|"Also Record Event"| LogEvent
         LogEvent -->|"Dual Write"| EventFile[("runtime_ram/events.json")]:::io
         LogEvent -->|"Compress"| BitStream[("runtime_ram/cli_events/")]:::storage
+    end
+
+    subgraph Storage_Layer [Storage Layer]
+        Delta("<b>DeltaRAM</b><br/>(State Diffs)"):::storage
     end
 
     subgraph IO_Layer [Low-level I/O Layer]
@@ -173,6 +179,9 @@ graph TD
 
     %% Link Styles
     linkStyle default stroke-width:2px,fill:none,stroke:black;
+    
+    %% Update Stats happens finally from CLI
+    CLI -.-> |"5. Finally: Update Stats"| Delta
 ```
 
 ---
